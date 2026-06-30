@@ -1,0 +1,15 @@
+networkx==3.6.1
+biopandas==0.5.1
+ProDy==2.6.1
+pandas==3.0.3
+numpy==2.5.0
+matplotlib==3.11
+scipy==1.18
+pyvis==0.3.2
+seaborn==0.13.2
+infomap==2.13.0
+cosmol-viewer=0.2.22
+ase==3.29.0
+requests==2.34.2
+scikit-learn==1.9.0
+click==8.4.2
