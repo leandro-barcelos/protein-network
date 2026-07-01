@@ -29,11 +29,30 @@ def _to_residue_ranges(resnums: list[int]) -> str:
     return ",".join(ranges)
 
 
-class ProteinNetwork(ABC):
-    graph: nx.Graph
+def _fiedler_split(G: nx.Graph, weight: float):
+    nodes = list(G.nodes())
+    if len(nodes) < 2:
+        return set(nodes), set()
+    L = nx.laplacian_matrix(G, nodelist=nodes, weight=weight).astype(float)
+    try:
+        from scipy.sparse.linalg import eigsh
 
+        k = min(2, L.shape[0] - 1)
+        vals, vecs = eigsh(L, k=k + 1, which="SM")
+        fiedler = vecs[:, 1]
+    except Exception:
+        L_dense = L.toarray()
+        vals, vecs = np.linalg.eigh(L_dense)
+        fiedler = vecs[:, 1]
+    a = {nodes[i] for i in range(len(nodes)) if fiedler[i] >= 0}
+    b = {nodes[i] for i in range(len(nodes)) if fiedler[i] < 0}
+    return a, b
+
+
+class ProteinNetwork(ABC):
     def __init__(self, pdb: PDB):
         self.pdb = pdb
+        self.graph: nx.Graph
         self._build_network()
 
     @abstractmethod
@@ -50,15 +69,26 @@ class ProteinNetwork(ABC):
             self.graph, weight="weight", seed=42, num_trials=20
         )
 
-    def validate_communities(
-        self, validation_filepath: str, communities: list[set]
-    ) -> dict:
-        with open(validation_filepath) as f:
-            family_to_chains: dict[str, list[str]] = json.load(f)
-        chain_to_family = {
-            ch: family for family, chains in family_to_chains.items() for ch in chains
-        }
+    def spectral_bipartition(self, k: int, weighted: bool):
+        weight = "weight" if weighted else None
+        comps = [set(c) for c in nx.connected_components(self.graph)]
+        while len(comps) < k:
+            comps.sort(key=len, reverse=True)
+            biggest = comps.pop(0)
+            if len(biggest) < 2:
+                comps.append(biggest)
+                break
+            sub = self.graph.subgraph(biggest)
+            part_a, part_b = _fiedler_split(sub, weight)
+            if not part_a or not part_b:
+                comps.append(biggest)
+                break
+            comps.extend([part_a, part_b])
+        return comps
 
+    def _compare_to_annotations(
+        self, communities: list[set], chain_to_family: dict[str, str]
+    ) -> tuple[list[int], list[str], int]:
         node_to_comm = {n: i for i, comm in enumerate(communities) for n in comm}
 
         comm_labels: list[int] = []
@@ -72,6 +102,36 @@ class ProteinNetwork(ABC):
             comm_labels.append(node_to_comm[n])
             truth_labels.append(truth)
 
+        return comm_labels, truth_labels, skipped
+
+    def evaluate_communities(
+        self, communities: list[set], chain_to_family: dict[str, str]
+    ) -> dict:
+        """Quiet ARI/NMI evaluation against annotations (no printing or files)."""
+        comm_labels, truth_labels, _ = self._compare_to_annotations(
+            communities, chain_to_family
+        )
+        if not comm_labels:
+            return {"ari": float("nan"), "nmi": float("nan"), "n_annotated": 0}
+        return {
+            "ari": adjusted_rand_score(truth_labels, comm_labels),
+            "nmi": normalized_mutual_info_score(truth_labels, comm_labels),
+            "n_annotated": len(comm_labels),
+        }
+
+    def validate_communities(
+        self, validation_filepath: str, communities: list[set], out_dir: str
+    ) -> dict:
+        with open(validation_filepath) as f:
+            family_to_chains: dict[str, list[str]] = json.load(f)
+        chain_to_family = {
+            ch: family for family, chains in family_to_chains.items() for ch in chains
+        }
+
+        comm_labels, truth_labels, skipped = self._compare_to_annotations(
+            communities, chain_to_family
+        )
+
         if not comm_labels:
             return {}
 
@@ -82,13 +142,16 @@ class ProteinNetwork(ABC):
         ari = adjusted_rand_score(truth_labels, comm_labels)
         nmi = normalized_mutual_info_score(truth_labels, comm_labels)
 
-        print("\n--- Communities Validation ---")
+        create_dir(out_dir)
+        contingency_filepath = os.path.join(out_dir, "contingency.csv")
+        contingency.to_csv(contingency_filepath)
+
+        print("\n= Communities Validation =")
         print(
-            f"Ground truth: {validation_filepath} ({len(set(truth_labels))} families)"
+            f"Annotations: {validation_filepath} ({len(set(truth_labels))} families)"
         )
         print(f"Annotated nodes: {len(comm_labels)} ({skipped} skipped)")
-        print("\nContingency table (communities x family):")
-        print(contingency.to_string())
+        print(f"Contingency table (communities x family) saved to {contingency_filepath}")
         print(f"\nARI: {ari:.4f}")
         print(f"NMI: {nmi:.4f}")
 
@@ -189,10 +252,8 @@ class ProteinNetwork(ABC):
         plt.savefig(filepath, dpi=150)
         plt.close()
 
-    def plot_communities(self, communities: list[set], out_dir: str):
-        filepath = os.path.join(out_dir, "communities.jpg")
-        print(f"Plotting communities ({filepath})")
-        
+    def log_communities(self, communities: list[set]):
+        print(f"Communities found: {len(communities)}")
         for i, comm in enumerate(communities):
             try:
                 chains = {self.graph.nodes[n]["node_id"].split(":")[0] for n in comm}
@@ -200,6 +261,10 @@ class ProteinNetwork(ABC):
                 chains = {self.graph.nodes[n]["chain_id"] for n in comm}
 
             print(f"Comm {i}: {chains}")
+
+    def plot_communities(self, communities: list[set], out_dir: str):
+        filepath = os.path.join(out_dir, "communities.jpg")
+        print(f"Plotting communities ({filepath})")
 
         node_to_community = {n: i for i, comm in enumerate(communities) for n in comm}
         colors = sns.color_palette(None, len(communities))
@@ -292,7 +357,7 @@ class AlphaCarbonNetwork(ProteinNetwork):
     def __init__(self, pdb: PDB, cutoff: float, weighted: bool = False):
         self.cutoff = cutoff
         self.weighted = weighted
-        super(pdb)
+        super().__init__(pdb)
 
     def _build_network(self) -> None:
         filtered_df = self.pdb.filter_atoms("CA")
@@ -341,7 +406,7 @@ class BetaCarbonNetwork(ProteinNetwork):
     def __init__(self, pdb: PDB, cutoff: float, weighted: bool = False):
         self.cutoff = cutoff
         self.weighted = weighted
-        super(pdb)
+        super().__init__(pdb)
 
     def _build_network(self) -> None:
         filtered_df = self.pdb.filter_atoms("CB")
@@ -389,7 +454,7 @@ class BetaCarbonNetwork(ProteinNetwork):
 class ResidueNetwork(ProteinNetwork):
     def __init__(self, pdb: PDB, cutoff: float):
         self.cutoff = cutoff
-        super(pdb)
+        super().__init__(pdb)
 
     def _build_network(self) -> None:
         coords = self.pdb.dataframe[["x_coord", "y_coord", "z_coord"]].to_numpy()
@@ -470,13 +535,14 @@ class ResidueNetwork(ProteinNetwork):
             f"Residue network: {G.number_of_nodes()} nodes, "
             f"{G.number_of_edges()} weighted edges"
         )
-        return G
+
+        self.graph = G
 
 
 class ChainNetwork(ProteinNetwork):
     def __init__(self, pdb: PDB, cutoff: float):
         self.cutoff = cutoff
-        super(pdb)
+        super().__init__(pdb)
 
     def _build_network(self) -> None:
         df = self.pdb.dataframe.reset_index(drop=True)
@@ -528,4 +594,4 @@ class ChainNetwork(ProteinNetwork):
             f"Chain network: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
         )
 
-        return G
+        self.graph = G
