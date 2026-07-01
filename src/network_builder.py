@@ -1,0 +1,531 @@
+from abc import ABC, abstractmethod
+from itertools import combinations
+import json
+import os
+
+import pandas as pd
+from pdb_parser import PDB, EXTRACTED_PDB_PATH
+import networkx as nx
+from scipy.spatial import cKDTree
+import numpy as np
+import matplotlib.pyplot as plt
+from pyvis.network import Network
+import seaborn as sns
+from utils import create_dir
+from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
+import infomap
+
+
+def _to_residue_ranges(resnums: list[int]) -> str:
+    sorted_nums = sorted(resnums)
+    ranges, start, end = [], sorted_nums[0], sorted_nums[0]
+    for n in sorted_nums[1:]:
+        if n == end + 1:
+            end = n
+        else:
+            ranges.append(f"{start}-{end}" if start != end else str(start))
+            start = end = n
+    ranges.append(f"{start}-{end}" if start != end else str(start))
+    return ",".join(ranges)
+
+
+class ProteinNetwork(ABC):
+    graph: nx.Graph
+
+    def __init__(self, pdb: PDB):
+        self.pdb = pdb
+        self._build_network()
+
+    @abstractmethod
+    def _build_network(self) -> None:
+        pass
+
+    def louvain(self) -> list[set]:
+        print("Detecting communities with Louvain")
+        return nx.algorithms.community.louvain_communities(self.graph, weight="weight")
+
+    def infomap(self) -> list[set]:
+        print("Detecting communities with Infomap")
+        return infomap.find_communities(
+            self.graph, weight="weight", seed=42, num_trials=20
+        )
+
+    def validate_communities(
+        self, validation_filepath: str, communities: list[set]
+    ) -> dict:
+        with open(validation_filepath) as f:
+            family_to_chains: dict[str, list[str]] = json.load(f)
+        chain_to_family = {
+            ch: family for family, chains in family_to_chains.items() for ch in chains
+        }
+
+        node_to_comm = {n: i for i, comm in enumerate(communities) for n in comm}
+
+        comm_labels: list[int] = []
+        truth_labels: list[str] = []
+        skipped = 0
+        for n in self.graph.nodes():
+            truth = chain_to_family.get(self.graph.nodes[n]["chain_id"])
+            if truth is None:
+                skipped += 1
+                continue
+            comm_labels.append(node_to_comm[n])
+            truth_labels.append(truth)
+
+        if not comm_labels:
+            return {}
+
+        contingency = pd.crosstab(
+            pd.Series(comm_labels, name="community"),
+            pd.Series(truth_labels, name="family"),
+        )
+        ari = adjusted_rand_score(truth_labels, comm_labels)
+        nmi = normalized_mutual_info_score(truth_labels, comm_labels)
+
+        print("\n--- Communities Validation ---")
+        print(
+            f"Ground truth: {validation_filepath} ({len(set(truth_labels))} families)"
+        )
+        print(f"Annotated nodes: {len(comm_labels)} ({skipped} skipped)")
+        print("\nContingency table (communities x family):")
+        print(contingency.to_string())
+        print(f"\nARI: {ari:.4f}")
+        print(f"NMI: {nmi:.4f}")
+
+        return {"contingency": contingency, "ari": ari, "nmi": nmi}
+
+    def generate_interative_network(self, out_dir: str):
+        filepath = os.path.join(out_dir, "graph.html")
+        print(f"Generating interactive network ({filepath})")
+
+        net = Network(height="800px", width="100%", notebook=False)
+        net.from_nx(self.graph)
+
+        create_dir(out_dir)
+        net.write_html(filepath, notebook=False)
+
+    def compute_network_stats(self) -> dict:
+        n = self.graph.number_of_nodes()
+        m = self.graph.number_of_edges()
+
+        stats: dict = {
+            "num_nodes": n,
+            "num_edges": m,
+            "avg_degree": (2 * m / n) if n > 0 else 0.0,
+            "density": nx.density(self.graph),
+            "clustering_coefficient": nx.average_clustering(self.graph),
+            "assortativity": (
+                nx.degree_assortativity_coefficient(self.graph)
+                if m > 0
+                else float("nan")
+            ),
+        }
+
+        largest_cc = max(nx.connected_components(self.graph), key=len, default=set())
+        G_lcc = self.graph.subgraph(largest_cc)
+        stats["largest_component_size"] = len(largest_cc)
+        stats["largest_component_fraction"] = len(largest_cc) / n if n > 0 else 0.0
+        stats["avg_shortest_path"] = (
+            nx.average_shortest_path_length(G_lcc) if len(largest_cc) > 1 else 0.0
+        )
+
+        return stats
+
+    def plot_degree_distribution(self, out_dir: str):
+        filepath = os.path.join(out_dir, "degree_dist.jpg")
+        print(f"Plotting degree distribution ({filepath})")
+
+        degree_sequence = sorted((d for n, d in self.graph.degree()), reverse=True)
+
+        plt.figure()
+        sns.histplot(degree_sequence, kde=True)
+        plt.title("Degree histogram")
+        plt.xlabel("Degree")
+        plt.ylabel("# of Nodes")
+        plt.tight_layout()
+
+        create_dir(out_dir)
+        plt.savefig(filepath)
+        plt.close()
+
+    def plot_centrality(self, measure_name: str, out_dir: str):
+        if measure_name == "betweenness":
+            cent = nx.betweenness_centrality(self.graph)
+        elif measure_name == "degree":
+            cent = nx.degree_centrality(self.graph)
+        elif measure_name == "closeness":
+            cent = nx.closeness_centrality(self.graph)
+        else:
+            return
+
+        filepath = os.path.join(out_dir, f"{measure_name}_centrality.jpg")
+        print(f"Plotting {measure_name} centrality ({filepath})")
+
+        nodes = list(self.graph.nodes())
+        values = np.array([cent[n] for n in nodes])
+        vmax = values.max() if values.max() > 0 else 1.0
+        sizes = 20 + 400 * (values / vmax)
+
+        pos = {
+            n: (self.graph.nodes[n]["x_coord"], self.graph.nodes[n]["y_coord"])
+            for n in self.graph.nodes()
+        }
+
+        plt.figure(figsize=(10, 10))
+        nx.draw_networkx_edges(self.graph, pos, width=0.3, alpha=0.4)
+        nodes_drawn = nx.draw_networkx_nodes(
+            self.graph,
+            pos,
+            nodelist=nodes,
+            node_size=sizes,
+            node_color=values,
+            cmap=plt.cm.plasma,
+        )
+        plt.colorbar(nodes_drawn, label=measure_name.capitalize())
+        plt.axis("off")
+        plt.tight_layout()
+
+        create_dir(out_dir)
+        plt.savefig(filepath, dpi=150)
+        plt.close()
+
+    def plot_communities(self, communities: list[set], out_dir: str):
+        filepath = os.path.join(out_dir, "communities.jpg")
+        print(f"Plotting communities ({filepath})")
+        
+        for i, comm in enumerate(communities):
+            try:
+                chains = {self.graph.nodes[n]["node_id"].split(":")[0] for n in comm}
+            except KeyError:
+                chains = {self.graph.nodes[n]["chain_id"] for n in comm}
+
+            print(f"Comm {i}: {chains}")
+
+        node_to_community = {n: i for i, comm in enumerate(communities) for n in comm}
+        colors = sns.color_palette(None, len(communities))
+        node_colors = [colors[node_to_community[node]] for node in self.graph.nodes()]
+
+        pos = {
+            n: (self.graph.nodes[n]["x_coord"], self.graph.nodes[n]["y_coord"])
+            for n in self.graph.nodes()
+        }
+
+        plt.figure(figsize=(12, 8))
+        nx.draw(
+            self.graph,
+            pos,
+            node_color=node_colors,
+            node_size=30,
+            width=0.3,
+            with_labels=False,
+        )
+        plt.title("Communities (real spatial coordinates)", fontsize=18)
+
+        create_dir(out_dir)
+        plt.savefig(filepath, dpi=150)
+        plt.close()
+
+    def export_chimerax_script(
+        self,
+        communities: list[set],
+        out_dir: str,
+    ):
+        palette = [
+            "red",
+            "blue",
+            "green",
+            "orange",
+            "purple",
+            "cyan",
+            "magenta",
+            "yellow",
+            "pink",
+            "brown",
+        ]
+
+        pdb_paths = (
+            [
+                os.path.join(EXTRACTED_PDB_PATH, name)
+                for name in os.listdir(EXTRACTED_PDB_PATH)
+                if name.endswith(".pdb")
+            ]
+            if self.pdb.filepath.endswith(".tar.gz")
+            else [self.pdb.filepath]
+        )
+
+        lines = [f"open {p}" for p in pdb_paths]
+        lines += ["cartoon", "color gray", "set bgColor white", "lighting simple"]
+
+        sample_node = next(iter(self.graph.nodes()))
+        is_chain_graph = "residue_number" not in self.graph.nodes[sample_node]
+
+        for comm_idx, comm in enumerate(communities):
+            color = palette[comm_idx % len(palette)]
+            if is_chain_graph:
+                for n in comm:
+                    chain = self.graph.nodes[n].get("chain_id", n)
+                    lines.append(f"color /{chain} {color}")
+            else:
+                chain_residues: dict[str, list[int]] = {}
+                for n in comm:
+                    chain_residues.setdefault(
+                        self.graph.nodes[n]["chain_id"], []
+                    ).append(self.graph.nodes[n]["residue_number"])
+                for chain, resnums in chain_residues.items():
+                    lines.append(
+                        f"color /{chain}:{_to_residue_ranges(resnums)} {color}"
+                    )
+
+        lines.append(
+            "save exports/communities_3d.png width 2000 height 2000 supersample 3"
+        )
+
+        create_dir(out_dir)
+        filepath = os.path.join(out_dir, "chimerax.cxc")
+        with open(filepath, "w") as f:
+            f.write("\n".join(lines))
+
+        print(f"ChimeraX script saved to {filepath}")
+
+
+class AlphaCarbonNetwork(ProteinNetwork):
+    def __init__(self, pdb: PDB, cutoff: float, weighted: bool = False):
+        self.cutoff = cutoff
+        self.weighted = weighted
+        super(pdb)
+
+    def _build_network(self) -> None:
+        filtered_df = self.pdb.filter_atoms("CA")
+
+        coords = filtered_df[["x_coord", "y_coord", "z_coord"]].to_numpy()
+
+        tree = cKDTree(coords)
+        pairs = tree.query_pairs(self.cutoff, output_type="set")
+
+        G = nx.Graph()
+        G.add_nodes_from(range(len(filtered_df)))
+        if self.weighted:
+            for i, j in pairs:
+                distance = np.linalg.norm(coords[i] - coords[j])
+                G.add_edge(i, j, weight=1 / distance)
+        else:
+            G.add_edges_from(pairs, weight=1)
+        for i, (node_id, chain_id, x, y, z, resnum, insertion) in enumerate(
+            zip(
+                filtered_df["node_id"],
+                filtered_df["chain_id"],
+                filtered_df["x_coord"],
+                filtered_df["y_coord"],
+                filtered_df["z_coord"],
+                filtered_df["residue_number"],
+                filtered_df["insertion"].str.strip(),
+            )
+        ):
+            G.nodes[i]["node_id"] = node_id
+            G.nodes[i]["chain_id"] = chain_id
+            G.nodes[i]["x_coord"] = x
+            G.nodes[i]["y_coord"] = y
+            G.nodes[i]["z_coord"] = z
+            G.nodes[i]["residue_number"] = resnum
+            G.nodes[i]["insertion"] = insertion
+
+        print(
+            f"Alpha-carbon network: {G.number_of_nodes()} nodes, "
+            f"{G.number_of_edges()} edges"
+        )
+
+        self.graph = G
+
+
+class BetaCarbonNetwork(ProteinNetwork):
+    def __init__(self, pdb: PDB, cutoff: float, weighted: bool = False):
+        self.cutoff = cutoff
+        self.weighted = weighted
+        super(pdb)
+
+    def _build_network(self) -> None:
+        filtered_df = self.pdb.filter_atoms("CB")
+
+        coords = filtered_df[["x_coord", "y_coord", "z_coord"]].to_numpy()
+
+        tree = cKDTree(coords)
+        pairs = tree.query_pairs(self.cutoff, output_type="set")
+
+        G = nx.Graph()
+        G.add_nodes_from(range(len(filtered_df)))
+        if self.weighted:
+            for i, j in pairs:
+                distance = np.linalg.norm(coords[i] - coords[j])
+                G.add_edge(i, j, weight=1 / distance)
+        else:
+            G.add_edges_from(pairs, weight=1)
+        for i, (node_id, chain_id, x, y, z, resnum, insertion) in enumerate(
+            zip(
+                filtered_df["node_id"],
+                filtered_df["chain_id"],
+                filtered_df["x_coord"],
+                filtered_df["y_coord"],
+                filtered_df["z_coord"],
+                filtered_df["residue_number"],
+                filtered_df["insertion"].str.strip(),
+            )
+        ):
+            G.nodes[i]["node_id"] = node_id
+            G.nodes[i]["chain_id"] = chain_id
+            G.nodes[i]["x_coord"] = x
+            G.nodes[i]["y_coord"] = y
+            G.nodes[i]["z_coord"] = z
+            G.nodes[i]["residue_number"] = resnum
+            G.nodes[i]["insertion"] = insertion
+
+        print(
+            f"Beta-carbon network: {G.number_of_nodes()} nodes, "
+            f"{G.number_of_edges()} edges"
+        )
+
+        self.graph = G
+
+
+class ResidueNetwork(ProteinNetwork):
+    def __init__(self, pdb: PDB, cutoff: float):
+        self.cutoff = cutoff
+        super(pdb)
+
+    def _build_network(self) -> None:
+        coords = self.pdb.dataframe[["x_coord", "y_coord", "z_coord"]].to_numpy()
+
+        node_ids = self.pdb.dataframe["node_id"].to_numpy()
+        residues = list(dict.fromkeys(node_ids))
+        residue_to_idx = {node_id: i for i, node_id in enumerate(residues)}
+        atom_to_residue = np.array([residue_to_idx[node_id] for node_id in node_ids])
+
+        reps: dict[str, dict] = {}
+        for node_id, group in self.pdb.dataframe.groupby("node_id", sort=False):
+            ca = group[group["atom_name"] == "CA"]
+            ref = ca.iloc[0] if len(ca) else group.iloc[0]
+            x, y, z = (
+                (ref["x_coord"], ref["y_coord"], ref["z_coord"])
+                if len(ca)
+                else (
+                    group["x_coord"].mean(),
+                    group["y_coord"].mean(),
+                    group["z_coord"].mean(),
+                )
+            )
+            reps[node_id] = {
+                "node_id": str(node_id),
+                "chain_id": str(ref["chain_id"]),
+                "residue_number": int(ref["residue_number"]),
+                "insertion": str(ref["insertion"]).strip(),
+                "x_coord": float(x),
+                "y_coord": float(y),
+                "z_coord": float(z),
+            }
+
+        G = nx.Graph()
+        for i, node_id in enumerate(residues):
+            G.add_node(i, **reps[node_id])
+
+        tree = cKDTree(coords)
+        distances = tree.sparse_distance_matrix(
+            tree, self.cutoff, output_type="coo_matrix"
+        )
+
+        atom_i = distances.row
+        atom_j = distances.col
+        pair_distances = distances.data
+        contact_mask = atom_i < atom_j
+
+        atom_i = atom_i[contact_mask]
+        atom_j = atom_j[contact_mask]
+        pair_distances = pair_distances[contact_mask]
+
+        res_i = atom_to_residue[atom_i]
+        res_j = atom_to_residue[atom_j]
+        inter_residue_mask = res_i != res_j
+        res_i = res_i[inter_residue_mask]
+        res_j = res_j[inter_residue_mask]
+        pair_distances = pair_distances[inter_residue_mask]
+
+        residue_contacts = pd.DataFrame(
+            {
+                "source": np.minimum(res_i, res_j),
+                "target": np.maximum(res_i, res_j),
+                "distance": pair_distances,
+            }
+        )
+        residue_edges = residue_contacts.groupby(["source", "target"]).agg(
+            weight=("distance", "size"),
+            min_distance=("distance", "min"),
+        )
+        for (res_i, res_j), edge_data in residue_edges.iterrows():
+            G.add_edge(
+                int(res_i),
+                int(res_j),
+                weight=int(edge_data["weight"]),
+                min_distance=float(edge_data["min_distance"]),
+            )
+
+        print(
+            f"Residue network: {G.number_of_nodes()} nodes, "
+            f"{G.number_of_edges()} weighted edges"
+        )
+        return G
+
+
+class ChainNetwork(ProteinNetwork):
+    def __init__(self, pdb: PDB, cutoff: float):
+        self.cutoff = cutoff
+        super(pdb)
+
+    def _build_network(self) -> None:
+        df = self.pdb.dataframe.reset_index(drop=True)
+
+        G = nx.Graph()
+        chains: dict[str, dict] = {}
+        for chain, sub in df.groupby("chain_id", sort=False):
+            coords = sub[["x_coord", "y_coord", "z_coord"]].to_numpy()
+            chains[chain] = {
+                "tree": cKDTree(coords),
+                "mins": coords.min(axis=0),
+                "maxs": coords.max(axis=0),
+            }
+            G.add_node(
+                chain,
+                chain_id=chain,
+                size=len(sub),
+                x_coord=float(sub["x_coord"].mean()),
+                y_coord=float(sub["y_coord"].mean()),
+                z_coord=float(sub["z_coord"].mean()),
+            )
+
+        for chain_a, chain_b in combinations(chains, 2):
+            data_a = chains[chain_a]
+            data_b = chains[chain_b]
+            gap = np.maximum(
+                0,
+                np.maximum(
+                    data_a["mins"] - data_b["maxs"], data_b["mins"] - data_a["maxs"]
+                ),
+            )
+            if np.linalg.norm(gap) > self.cutoff:
+                continue
+
+            distances = data_a["tree"].sparse_distance_matrix(
+                data_b["tree"], self.cutoff, output_type="coo_matrix"
+            )
+            if distances.nnz == 0:
+                continue
+
+            G.add_edge(
+                chain_a,
+                chain_b,
+                weight=int(distances.nnz),
+                min_distance=float(distances.data.min()),
+            )
+
+        print(
+            f"Chain network: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
+        )
+
+        return G
