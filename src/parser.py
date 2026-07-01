@@ -72,6 +72,13 @@ def model_selection_parser() -> argparse.ArgumentParser:
         metavar="JSON",
         help="JSON {family_name: [chain_id, ...]} used for ARI/NMI and spectral k",
     )
+    parser.add_argument(
+        "--graphs",
+        nargs="+",
+        choices=["a-carbon", "b-carbon", "residue", "chain"],
+        default=["a-carbon", "b-carbon", "residue", "chain"],
+        help="Graph types to sweep (default: all)",
+    )
     parser.add_argument("--cutoff-start", type=float, default=4.0)
     parser.add_argument("--cutoff-stop", type=float, default=12.0)
     parser.add_argument("--cutoff-step", type=float, default=1.0)
@@ -84,7 +91,7 @@ def model_selection_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-o",
         "--out",
-        default="exports/model_selection.csv",
-        help="Output CSV path",
+        default="exports",
+        help="Directory where model_selection.csv is saved",
     )
     return parser

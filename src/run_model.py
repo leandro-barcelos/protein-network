@@ -10,6 +10,7 @@ from protein_network import (
     ResidueNetwork,
 )
 from parser import run_model_parser
+from utils import create_dir
 
 
 def main():
@@ -61,6 +62,12 @@ def main():
 
     if args.plot:
         network.plot_degree_distribution(args.out)
+        create_dir(args.out)
+        cent.to_csv(os.path.join(args.out, "centralities.csv"))
+        network.plot_centralities(args.out, cent=cent)
+        for measure in ("degree", "betweenness", "closeness", "eigenvector", "strength"):
+            network.plot_centrality(measure, args.out)
+
     if args.validate:
         with open(args.validate) as f:
             family_to_chains = json.load(f)

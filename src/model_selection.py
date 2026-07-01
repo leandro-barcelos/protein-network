@@ -161,6 +161,7 @@ def main():
                         else {
                             "ari": float("nan"),
                             "nmi": float("nan"),
+                            "purity": float("nan"),
                             "n_annotated": 0,
                         }
                     )

@@ -49,6 +49,46 @@ def _fiedler_split(G: nx.Graph, weight: float):
     return a, b
 
 
+def _safe(fn, G) -> float:
+    try:
+        return float(fn(G))
+    except Exception:
+        return float("nan")
+
+
+def _purity(comm_labels: list[int], truth_labels: list[str]) -> float:
+    contingency = pd.crosstab(pd.Series(comm_labels), pd.Series(truth_labels))
+    return float(contingency.max(axis=1).sum() / contingency.to_numpy().sum())
+
+
+def _sampled_closeness(G: nx.Graph, k: int, weight, seed: int) -> dict:
+    import random
+
+    rng = random.Random(seed)
+    nodes = list(G.nodes())
+    sources = rng.sample(nodes, min(k, len(nodes)))
+
+    dist_sum = {v: 0.0 for v in nodes}
+    reach = {v: 0 for v in nodes}
+    for s in sources:
+        if weight:
+            lengths = nx.single_source_dijkstra_path_length(G, s, weight=weight)
+        else:
+            lengths = nx.single_source_shortest_path_length(G, s)
+        for v, d in lengths.items():
+            dist_sum[v] += d
+            reach[v] += 1
+
+    closeness = {}
+    for v in nodes:
+        if reach[v] > 1 and dist_sum[v] > 0:
+            avg = dist_sum[v] / reach[v]
+            closeness[v] = (1.0 / avg) * ((reach[v] - 1) / (len(nodes) - 1))
+        else:
+            closeness[v] = 0.0
+    return closeness
+
+
 class ProteinNetwork(ABC):
     def __init__(self, pdb: PDB):
         self.pdb = pdb
@@ -123,15 +163,20 @@ class ProteinNetwork(ABC):
     def evaluate_communities(
         self, communities: list[set], chain_to_family: dict[str, str]
     ) -> dict:
-        """Quiet ARI/NMI evaluation against annotations (no printing or files)."""
         comm_labels, truth_labels, _ = self._compare_to_annotations(
             communities, chain_to_family
         )
         if not comm_labels:
-            return {"ari": float("nan"), "nmi": float("nan"), "n_annotated": 0}
+            return {
+                "ari": float("nan"),
+                "nmi": float("nan"),
+                "purity": float("nan"),
+                "n_annotated": 0,
+            }
         return {
             "ari": adjusted_rand_score(truth_labels, comm_labels),
             "nmi": normalized_mutual_info_score(truth_labels, comm_labels),
+            "purity": _purity(comm_labels, truth_labels),
             "n_annotated": len(comm_labels),
         }
 
@@ -157,6 +202,7 @@ class ProteinNetwork(ABC):
         )
         ari = adjusted_rand_score(truth_labels, comm_labels)
         nmi = normalized_mutual_info_score(truth_labels, comm_labels)
+        purity = _purity(comm_labels, truth_labels)
 
         create_dir(out_dir)
         contingency_filepath = os.path.join(out_dir, "contingency.csv")
@@ -170,8 +216,9 @@ class ProteinNetwork(ABC):
         print(f"Contingency table (communities x family) saved to {contingency_filepath}")
         print(f"\nARI: {ari:.4f}")
         print(f"NMI: {nmi:.4f}")
+        print(f"Purity: {purity:.4f}")
 
-        return {"contingency": contingency, "ari": ari, "nmi": nmi}
+        return {"contingency": contingency, "ari": ari, "nmi": nmi, "purity": purity}
 
     def generate_interative_network(self, out_dir: str):
         filepath = os.path.join(out_dir, "graph.html")
@@ -210,22 +257,80 @@ class ProteinNetwork(ABC):
 
         return stats
 
+    def degree_distribution(self) -> pd.DataFrame:
+        degrees = np.array([d for _, d in self.graph.degree()])
+        values, counts = np.unique(degrees, return_counts=True)
+        return pd.DataFrame(
+            {"degree": values, "count": counts, "prob": counts / counts.sum()}
+        )
+
+    def compute_centralities(
+        self, weighted: bool = True, betweenness_k: int | None = 500, seed: int = 42
+    ) -> pd.DataFrame:
+        weight = "weight" if weighted else None
+        n = self.graph.number_of_nodes()
+        approximate = betweenness_k is not None and n > betweenness_k
+
+        deg = dict(self.graph.degree())
+        strength = dict(self.graph.degree(weight="weight"))
+
+        if approximate:
+            k = min(betweenness_k, n)
+            print(f"Computing centralities (sampling {k}/{n} sources)")
+            btw = nx.betweenness_centrality(
+                self.graph, k=k, weight=weight, normalized=True, seed=seed
+            )
+            close = _sampled_closeness(self.graph, k=k, weight=weight, seed=seed)
+        else:
+            btw = nx.betweenness_centrality(
+                self.graph, weight=weight, normalized=True
+            )
+            close = nx.closeness_centrality(self.graph, distance=weight)
+
+        try:
+            eig = nx.eigenvector_centrality_numpy(self.graph, weight=weight)
+        except Exception:
+            eig = {node: float("nan") for node in self.graph.nodes()}
+
+        clust = nx.clustering(self.graph, weight=weight)
+
+        df = pd.DataFrame(
+            {
+                "degree": pd.Series(deg),
+                "strength": pd.Series(strength),
+                "betweenness": pd.Series(btw),
+                "closeness": pd.Series(close),
+                "eigenvector": pd.Series(eig),
+                "clustering": pd.Series(clust),
+            }
+        )
+        meta = pd.DataFrame.from_dict(dict(self.graph.nodes(data=True)), orient="index")
+        meta_cols = [
+            c for c in ("node_id", "chain_id", "residue_number") if c in meta.columns
+        ]
+        df = df.join(meta[meta_cols])
+        return df.sort_values("betweenness", ascending=False)
+
     def plot_degree_distribution(self, out_dir: str):
         filepath = os.path.join(out_dir, "degree_dist.jpg")
         print(f"Plotting degree distribution ({filepath})")
 
-        degree_sequence = sorted((d for n, d in self.graph.degree()), reverse=True)
+        dist = self.degree_distribution()
 
-        plt.figure()
-        sns.histplot(degree_sequence, kde=True)
-        plt.title("Degree histogram")
-        plt.xlabel("Degree")
-        plt.ylabel("# of Nodes")
-        plt.tight_layout()
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+        sns.histplot(
+            x=dist["degree"], weights=dist["count"], kde=True, ax=axes[0]
+        )
+        axes[0].set(xlabel="Degree k", ylabel="# of Nodes", title="Degree histogram")
 
+        mask = (dist["degree"] > 0) & (dist["prob"] > 0)
+        axes[1].loglog(dist["degree"][mask], dist["prob"][mask], "o", ms=4)
+        axes[1].set(xlabel="Degree k (log)", ylabel="P(k) (log)", title="Log-log scale")
+
+        fig.tight_layout()
         create_dir(out_dir)
-        plt.savefig(filepath)
-        plt.close()
+        fig.savefig(filepath, dpi=150)
+        plt.close(fig)
 
     def plot_centrality(self, measure_name: str, out_dir: str):
         if measure_name == "betweenness":
@@ -234,6 +339,13 @@ class ProteinNetwork(ABC):
             cent = nx.degree_centrality(self.graph)
         elif measure_name == "closeness":
             cent = nx.closeness_centrality(self.graph)
+        elif measure_name == "eigenvector":
+            try:
+                cent = nx.eigenvector_centrality_numpy(self.graph, weight="weight")
+            except Exception:
+                return
+        elif measure_name == "strength":
+            cent = dict(self.graph.degree(weight="weight"))
         else:
             return
 
@@ -268,6 +380,141 @@ class ProteinNetwork(ABC):
         plt.savefig(filepath, dpi=150)
         plt.close()
 
+    def plot_centralities(
+        self, out_dir: str, cent: pd.DataFrame | None = None, weighted: bool = True
+    ):
+        """Distribution (histogram) of each centrality measure in one figure."""
+        if cent is None:
+            cent = self.compute_centralities(weighted=weighted)
+
+        filepath = os.path.join(out_dir, "centrality_distributions.jpg")
+        print(f"Plotting centrality distributions ({filepath})")
+
+        cols = [
+            "degree",
+            "strength",
+            "betweenness",
+            "closeness",
+            "eigenvector",
+            "clustering",
+        ]
+        fig, axes = plt.subplots(2, 3, figsize=(14, 8))
+        for ax, col in zip(axes.flat, cols):
+            sns.histplot(cent[col].dropna(), bins=40, ax=ax)
+            ax.set(xlabel=col, ylabel="# of Nodes", title=f"Centrality: {col}")
+
+        fig.tight_layout()
+        create_dir(out_dir)
+        fig.savefig(filepath, dpi=150)
+        plt.close(fig)
+
+    def _structure_summary(self) -> str:
+        df = self.pdb.dataframe
+        name = os.path.splitext(os.path.basename(self.pdb.filepath))[0]
+        chains = sorted(df["chain_id"].unique())
+        return (
+            f"Estrutura '{name}': {len(df)} átomos, "
+            f"{df['node_id'].nunique()} resíduos, "
+            f"{len(chains)} cadeia(s) [{', '.join(chains)}]"
+        )
+
+    def network_summary(self) -> dict:
+        G = self.graph
+        n, m = G.number_of_nodes(), G.number_of_edges()
+        comps = list(nx.connected_components(G))
+        return {
+            "n_nodes": n,
+            "n_edges": m,
+            "avg_degree": (2 * m / n) if n else 0.0,
+            "density": nx.density(G),
+            "n_components": len(comps),
+            "giant_frac": (max(len(c) for c in comps) / n) if n else 0.0,
+            "avg_clustering": nx.average_clustering(G) if n else 0.0,
+        }
+
+    def _topology_metrics(self, cent: pd.DataFrame, top: int = 10) -> dict:
+        degrees = np.array([d for _, d in self.graph.degree()])
+
+        def top_nodes(col: str) -> list:
+            idx = cent.nlargest(top, col).index
+            if "node_id" in cent.columns:
+                return cent.loc[idx, "node_id"].tolist()
+            return [int(i) for i in idx]
+
+        return {
+            "avg_degree": float(degrees.mean()) if len(degrees) else 0.0,
+            "max_degree": int(degrees.max()) if len(degrees) else 0,
+            "degree_assortativity": _safe(
+                nx.degree_assortativity_coefficient, self.graph
+            ),
+            "avg_clustering": float(nx.average_clustering(self.graph)),
+            "top_degree": top_nodes("degree"),
+            "top_betweenness": top_nodes("betweenness"),
+        }
+
+    def _community_metrics(self, communities: list[set]) -> dict:
+        sizes = sorted((len(c) for c in communities), reverse=True)
+        try:
+            mod = nx.algorithms.community.modularity(
+                self.graph, communities, weight="weight"
+            )
+        except Exception:
+            mod = float("nan")
+        return {
+            "n_communities": len(communities),
+            "modularity": float(mod),
+            "largest": sizes[0] if sizes else 0,
+            "sizes_top10": sizes[:10],
+        }
+
+    def _validation_metrics(
+        self, communities: list[set], chain_to_family: dict[str, str], label: str
+    ) -> dict:
+        metrics = self.evaluate_communities(communities, chain_to_family)
+        return {
+            "label": label,
+            "n_communities": len(communities),
+            "n_truth_classes": len(set(chain_to_family.values())),
+            "purity": metrics["purity"],
+            "nmi": metrics["nmi"],
+            "ari": metrics["ari"],
+        }
+
+    def generate_report(
+        self,
+        out_dir: str,
+        params: dict,
+        communities: list[set],
+        chain_to_family: dict[str, str],
+        validation_label: str,
+        cent: pd.DataFrame | None = None,
+        top: int = 10,
+    ) -> dict:
+        """Consolidated run report (structure/params/network/topology/communities/
+        validation), saved as report.json."""
+        if cent is None:
+            cent = self.compute_centralities()
+
+        report = {
+            "input": os.path.basename(self.pdb.filepath),
+            "params": params,
+            "structure": self._structure_summary(),
+            "network": self.network_summary(),
+            "topology": self._topology_metrics(cent, top),
+            "communities": self._community_metrics(communities),
+            "validation": self._validation_metrics(
+                communities, chain_to_family, validation_label
+            ),
+        }
+
+        filepath = os.path.join(out_dir, "report.json")
+        print(f"Saving report ({filepath})")
+        create_dir(out_dir)
+        with open(filepath, "w") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+
+        return report
+
     def log_communities(self, communities: list[set]):
         print(f"Communities found: {len(communities)}")
         for i, comm in enumerate(communities):
@@ -277,6 +524,25 @@ class ProteinNetwork(ABC):
                 chains = {self.graph.nodes[n]["chain_id"] for n in comm}
 
             print(f"Comm {i}: {chains}")
+
+    def community_composition(self, communities: list[set]) -> pd.DataFrame:
+        rows = []
+        for i, comm in enumerate(sorted(communities, key=len, reverse=True)):
+            chain_counts = (
+                pd.Series([self.graph.nodes[n]["chain_id"] for n in comm])
+                .value_counts()
+            )
+            rows.append(
+                {
+                    "community": i,
+                    "size": len(comm),
+                    "n_chains": len(chain_counts),
+                    "top_chains": ", ".join(
+                        f"{c}({v})" for c, v in chain_counts.head(5).items()
+                    ),
+                }
+            )
+        return pd.DataFrame(rows)
 
     def plot_communities(self, communities: list[set], out_dir: str):
         filepath = os.path.join(out_dir, "communities.jpg")
@@ -305,6 +571,80 @@ class ProteinNetwork(ABC):
         create_dir(out_dir)
         plt.savefig(filepath, dpi=150)
         plt.close()
+
+    def plot_structure_3d(
+        self, communities: list[set], out_dir: str, by: str = "community"
+    ):
+        filepath = os.path.join(out_dir, f"structure_3d_{by}.jpg")
+        print(f"Plotting 3D structure ({filepath})")
+
+        nodes = list(self.graph.nodes())
+        xyz = np.array(
+            [
+                (
+                    self.graph.nodes[n]["x_coord"],
+                    self.graph.nodes[n]["y_coord"],
+                    self.graph.nodes[n]["z_coord"],
+                )
+                for n in nodes
+            ]
+        )
+
+        if by == "chain":
+            chains = sorted({self.graph.nodes[n]["chain_id"] for n in nodes})
+            chain_to_idx = {c: i for i, c in enumerate(chains)}
+            palette = sns.color_palette(None, len(chains))
+            node_colors = [
+                palette[chain_to_idx[self.graph.nodes[n]["chain_id"]]] for n in nodes
+            ]
+        else:
+            node_to_community = {
+                n: i for i, comm in enumerate(communities) for n in comm
+            }
+            palette = sns.color_palette(None, len(communities))
+            node_colors = [palette[node_to_community[n]] for n in nodes]
+
+        fig = plt.figure(figsize=(9, 8))
+        ax = fig.add_subplot(111, projection="3d")
+        ax.scatter(
+            xyz[:, 0], xyz[:, 1], xyz[:, 2], c=node_colors, s=8, alpha=0.8, linewidths=0
+        )
+        ax.set(
+            xlabel="x (Å)",
+            ylabel="y (Å)",
+            zlabel="z (Å)",
+            title=f"3D structure colored by {by}",
+        )
+        fig.tight_layout()
+
+        create_dir(out_dir)
+        fig.savefig(filepath, dpi=150)
+        plt.close(fig)
+
+    def export_membership_csv(self, communities: list[set], out_dir: str):
+        """Export the node -> community mapping (with metadata) to a CSV."""
+        filepath = os.path.join(out_dir, "membership.csv")
+        print(f"Exporting community membership ({filepath})")
+
+        node_to_community = {n: i for i, comm in enumerate(communities) for n in comm}
+        rows = []
+        for n in self.graph.nodes():
+            attrs = self.graph.nodes[n]
+            rows.append(
+                {
+                    "node": n,
+                    "node_id": attrs.get("node_id", n),
+                    "chain_id": attrs.get("chain_id"),
+                    "residue_number": attrs.get("residue_number"),
+                    "x_coord": attrs.get("x_coord"),
+                    "y_coord": attrs.get("y_coord"),
+                    "z_coord": attrs.get("z_coord"),
+                    "community": node_to_community.get(n),
+                }
+            )
+
+        create_dir(out_dir)
+        pd.DataFrame(rows).to_csv(filepath, index=False)
 
     def export_chimerax_script(
         self,
