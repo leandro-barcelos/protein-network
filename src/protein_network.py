@@ -69,6 +69,22 @@ class ProteinNetwork(ABC):
             self.graph, weight="weight", seed=42, num_trials=20
         )
 
+    def greedy(self) -> list[set]:
+        print("Detecting communities with greedy modularity (Clauset-Newman-Moore)")
+        return list(
+            nx.algorithms.community.greedy_modularity_communities(
+                self.graph, weight="weight"
+            )
+        )
+
+    def labelprop(self, seed: int = 42) -> list[set]:
+        print("Detecting communities with label propagation")
+        return list(
+            nx.algorithms.community.asyn_lpa_communities(
+                self.graph, weight="weight", seed=seed
+            )
+        )
+
     def spectral_bipartition(self, k: int, weighted: bool):
         weight = "weight" if weighted else None
         comps = [set(c) for c in nx.connected_components(self.graph)]

@@ -78,6 +78,10 @@ def run_algorithm(
         return network.louvain()
     if algorithm == "infomap":
         return network.infomap()
+    if algorithm == "greedy":
+        return network.greedy()
+    if algorithm == "labelprop":
+        return network.labelprop()
     if algorithm == "spectral":
         return network.spectral_bipartition(k, weighted)
     return None
@@ -128,6 +132,8 @@ def main():
                 runs: list[tuple[str, int | None]] = [
                     ("louvain", None),
                     ("infomap", None),
+                    ("greedy", None),
+                    ("labelprop", None),
                 ]
                 runs += [("spectral", k) for k in k_values]
 

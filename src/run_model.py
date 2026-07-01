@@ -1,3 +1,4 @@
+import json
 import os
 
 from pdb_parser import PDB
@@ -52,51 +53,66 @@ def main():
     if args.html and args.out:
         network.generate_interative_network(args.out)
 
+    any_community = (
+        args.louvain or args.infomap or args.greedy or args.labelprop or args.spectral
+    )
+
+    cent = network.compute_centralities() if (args.plot or any_community) else None
+
     if args.plot:
         network.plot_degree_distribution(args.out)
-        network.plot_centrality("degree", args.out)
-        network.plot_centrality("betweenness", args.out)
-        network.plot_centrality("closeness", args.out)
+    if args.validate:
+        with open(args.validate) as f:
+            family_to_chains = json.load(f)
+        chain_to_family = {
+            ch: fam for fam, chains in family_to_chains.items() for ch in chains
+        }
+        validation_label = os.path.basename(args.validate)
+    else:
+        chains = {network.graph.nodes[n]["chain_id"] for n in network.graph.nodes()}
+        chain_to_family = {c: c for c in chains}
+        validation_label = "cadeias"
 
-    if args.louvain or args.infomap or args.spectral:
+    def handle_communities(name: str, communities: list[set]):
+        subdir = os.path.join(args.out, name)
+        create_dir(subdir)
+        network.log_communities(communities)
+        network.community_composition(communities).to_csv(
+            os.path.join(subdir, "composition.csv"), index=False
+        )
+        network.export_membership_csv(communities, subdir)
+        if args.plot:
+            network.plot_communities(communities, subdir)
+            network.plot_structure_3d(communities, subdir)
+        if args.validate:
+            network.validate_communities(args.validate, communities, subdir)
+        network.generate_report(
+            subdir,
+            {**vars(args), "method": name},
+            communities,
+            chain_to_family,
+            validation_label,
+            cent=cent,
+        )
+        if args.chimerax:
+            network.export_chimerax_script(communities, subdir)
+
+    if any_community:
         print("\n===== Community detection =====")
 
         if args.louvain:
-            print("\n=== Louvain ===")
-            communities = network.louvain()
-            network.log_communities(communities)
-            if args.plot:
-                network.plot_communities(communities, os.path.join(args.out, "louvain"))
-            if args.validate:
-                network.validate_communities(
-                    args.validate, communities, os.path.join(args.out, "louvain")
-                )
-
+            handle_communities("louvain", network.louvain())
         if args.infomap:
-            print("\n=== InfoMap ===")
-            communities = network.infomap()
-            network.log_communities(communities)
-            if args.plot:
-                network.plot_communities(communities, os.path.join(args.out, "infomap"))
-            if args.validate:
-                network.validate_communities(
-                    args.validate, communities, os.path.join(args.out, "infomap")
-                )
-                
+            handle_communities("infomap", network.infomap())
+        if args.greedy:
+            handle_communities("greedy", network.greedy())
+        if args.labelprop:
+            handle_communities("labelprop", network.labelprop())
         if args.spectral and args.groups:
-            print("\n=== Spectral Bipartition ===")
-            weighted = args.weighted or args.graph == "chain" or args.graph == "residue"
-            communities = network.spectral_bipartition(args.groups, weighted)
-            network.log_communities(communities)
-            if args.plot:
-                network.plot_communities(communities, os.path.join(args.out, "spectral"))
-            if args.validate:
-                network.validate_communities(
-                    args.validate, communities, os.path.join(args.out, "spectral")
-                )
-            
-    if args.chimerax:
-            network.export_chimerax_script(communities, args.out)
+            weighted = args.weighted or args.graph in ("chain", "residue")
+            handle_communities(
+                "spectral", network.spectral_bipartition(args.groups, weighted)
+            )
 
 
 if __name__ == "__main__":

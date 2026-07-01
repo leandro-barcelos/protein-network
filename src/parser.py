@@ -29,6 +29,12 @@ def run_model_parser() -> argparse.ArgumentParser:
     comm.add_argument("-i", "--infomap", action="store_true")
     comm.add_argument("-b", "--spectral", action="store_true")
     comm.add_argument(
+        "-c", "--greedy", action="store_true", help="Greedy modularity (CNM)"
+    )
+    comm.add_argument(
+        "--labelprop", action="store_true", help="Asynchronous label propagation"
+    )
+    comm.add_argument(
         "--validate",
         metavar="JSON",
         help="Validate communities against a JSON{family_name: [chain_id, ...]}",
