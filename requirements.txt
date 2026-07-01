@@ -8,7 +8,6 @@ scipy==1.18
 pyvis==0.3.2
 seaborn==0.13.2
 infomap==2.13.0
-cosmol-viewer=0.2.22
 ase==3.29.0
 requests==2.34.2
 scikit-learn==1.9.0

@@ -1,9 +1,9 @@
 import argparse
+from itertools import combinations
 import json
 import logging
 import os
 import tarfile
-from typing import Optional
 
 import infomap
 import matplotlib.pyplot as plt
@@ -14,13 +14,11 @@ import seaborn as sns
 from ase.data import atomic_numbers, covalent_radii
 from biopandas.pdb import PandasPdb
 from pyvis.network import Network
-from scipy import sparse
 from scipy.spatial import cKDTree
-from scipy.spatial.distance import cdist
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
 LOGGER = logging.getLogger(__name__)
-TAR_OUT_DIR = "extracted_pdbs"
+TAR_OUT_DIR = "pdb/extracted"
 
 
 def pdb_to_dataframe(
@@ -143,7 +141,6 @@ def build_carbon_graph(
     df: pd.DataFrame,
     cutoff: float,
     atom: str = "CA",
-    lower_cutoff: Optional[float] = None,
     weighted: bool = False,
 ) -> nx.Graph:
     filtered_df = filter_atoms(df, atom)
@@ -153,8 +150,6 @@ def build_carbon_graph(
 
     tree = cKDTree(coords)
     pairs = tree.query_pairs(cutoff, output_type="set")
-    if lower_cutoff is not None:
-        pairs -= tree.query_pairs(lower_cutoff, output_type="set")
 
     G = nx.Graph()
     G.add_nodes_from(range(len(filtered_df)))
@@ -192,93 +187,47 @@ def build_carbon_graph(
 def build_alpha_carbon_graph(
     df: pd.DataFrame,
     cutoff: float,
-    lower_cutoff: Optional[float] = None,
     weighted: bool = False,
 ) -> nx.Graph:
     LOGGER.info(f"Building alpha-carbon network (cutoff={cutoff})")
-    return build_carbon_graph(df, cutoff, lower_cutoff=lower_cutoff, weighted=weighted)
+    return build_carbon_graph(df, cutoff, weighted=weighted)
 
 
 def build_beta_carbon_graph(
     df: pd.DataFrame,
     cutoff: float,
-    lower_cutoff: Optional[float] = None,
     weighted: bool = False,
 ) -> nx.Graph:
     LOGGER.info(f"Building beta-carbon network (cutoff={cutoff})")
-    return build_carbon_graph(
-        df, cutoff, atom="CB", lower_cutoff=lower_cutoff, weighted=weighted
-    )
-
-
-def build_grant_ahnert_graph(df: pd.DataFrame, s: float) -> nx.Graph:
-    coords = df[["x_coord", "y_coord", "z_coord"]].to_numpy()
-    distance = cdist(coords, coords)
-
-    radii = np.array(
-        [covalent_radii[atomic_numbers[atom]] for atom in df["element_symbol"]]
-    )
-    cutoff = s * (radii[:, None] + radii[None, :])
-
-    adjacency_matrix = distance <= cutoff
-    np.fill_diagonal(adjacency_matrix, 0)
-
-    G = nx.from_numpy_array(adjacency_matrix)
-    for i, (node_id, chain_id, x, y, z, resnum, insertion) in enumerate(
-        zip(
-            df["node_id"],
-            df["chain_id"],
-            df["x_coord"],
-            df["y_coord"],
-            df["z_coord"],
-            df["residue_number"],
-            df["insertion"].str.strip(),
-        )
-    ):
-        G.nodes[i]["node_id"] = node_id
-        G.nodes[i]["chain_id"] = chain_id
-        G.nodes[i]["x_coord"] = x
-        G.nodes[i]["y_coord"] = y
-        G.nodes[i]["z_coord"] = z
-        G.nodes[i]["residue_number"] = resnum
-        G.nodes[i]["insertion"] = insertion
-    return G
+    return build_carbon_graph(df, cutoff, atom="CB", weighted=weighted)
 
 
 def build_residue_graph(df: pd.DataFrame, s: float = 4.0) -> nx.Graph:
     LOGGER.info(f"Building Grant-Ahnert residue network (s={s}, {len(df)} atoms)")
     coords = df[["x_coord", "y_coord", "z_coord"]].to_numpy()
-    distance = cdist(coords, coords)
 
     radii = np.array(
-        [covalent_radii[atomic_numbers[atom]] for atom in df["element_symbol"]]
+        [covalent_radii[atomic_numbers[atom.strip()]] for atom in df["element_symbol"]]
     )
-    cutoff = s * (radii[:, None] + radii[None, :])
-    atomic_adj = distance <= cutoff
-    np.fill_diagonal(atomic_adj, 0)
-    LOGGER.info(f"Atomic network: {int(atomic_adj.sum() // 2)} contacts")
 
-    residues, atom_to_res = np.unique(df["node_id"].to_numpy(), return_inverse=True)
-    n_atoms, n_res = len(df), len(residues)
-    membership = sparse.csr_matrix(
-        (np.ones(n_atoms), (np.arange(n_atoms), atom_to_res)),
-        shape=(n_atoms, n_res),
-    )
-    weights = membership.T @ sparse.csr_matrix(atomic_adj) @ membership
-    weights = sparse.triu(weights, k=1).tocoo()
+    node_ids = df["node_id"].to_numpy()
+    residues = list(dict.fromkeys(node_ids))
+    residue_to_idx = {node_id: i for i, node_id in enumerate(residues)}
+    atom_to_residue = np.array([residue_to_idx[node_id] for node_id in node_ids])
 
     reps: dict[str, dict] = {}
     for node_id, group in df.groupby("node_id", sort=False):
         ca = group[group["atom_name"] == "CA"]
         ref = ca.iloc[0] if len(ca) else group.iloc[0]
-        if len(ca):
-            x, y, z = ref["x_coord"], ref["y_coord"], ref["z_coord"]
-        else:
-            x, y, z = (
+        x, y, z = (
+            (ref["x_coord"], ref["y_coord"], ref["z_coord"])
+            if len(ca)
+            else (
                 group["x_coord"].mean(),
                 group["y_coord"].mean(),
                 group["z_coord"].mean(),
             )
+        )
         reps[node_id] = {
             "node_id": str(node_id),
             "chain_id": str(ref["chain_id"]),
@@ -292,8 +241,51 @@ def build_residue_graph(df: pd.DataFrame, s: float = 4.0) -> nx.Graph:
     G = nx.Graph()
     for i, node_id in enumerate(residues):
         G.add_node(i, **reps[node_id])
-    for a, b, w in zip(weights.row, weights.col, weights.data):
-        G.add_edge(int(a), int(b), weight=int(w))
+
+    max_cutoff = s * 2.0 * radii.max()
+    tree = cKDTree(coords)
+    distances = tree.sparse_distance_matrix(tree, max_cutoff, output_type="coo_matrix")
+
+    atom_i = distances.row
+    atom_j = distances.col
+    pair_distances = distances.data
+    contact_mask = (atom_i < atom_j) & (
+        pair_distances <= s * (radii[atom_i] + radii[atom_j])
+    )
+
+    atom_i = atom_i[contact_mask]
+    atom_j = atom_j[contact_mask]
+    pair_distances = pair_distances[contact_mask]
+    atomic_contacts = len(pair_distances)
+
+    res_i = atom_to_residue[atom_i]
+    res_j = atom_to_residue[atom_j]
+    inter_residue_mask = res_i != res_j
+    res_i = res_i[inter_residue_mask]
+    res_j = res_j[inter_residue_mask]
+    pair_distances = pair_distances[inter_residue_mask]
+
+    residue_contacts = pd.DataFrame(
+        {
+            "source": np.minimum(res_i, res_j),
+            "target": np.maximum(res_i, res_j),
+            "distance": pair_distances,
+        }
+    )
+    residue_edges = residue_contacts.groupby(["source", "target"]).agg(
+        weight=("distance", "size"),
+        min_distance=("distance", "min"),
+    )
+    for (res_i, res_j), edge_data in residue_edges.iterrows():
+        G.add_edge(
+            int(res_i),
+            int(res_j),
+            weight=int(edge_data["weight"]),
+            min_distance=float(edge_data["min_distance"]),
+        )
+
+    LOGGER.info(f"Atomic network: {atomic_contacts} contacts")
+
     LOGGER.info(
         f"Residue network: {G.number_of_nodes()} nodes, "
         f"{G.number_of_edges()} weighted edges"
@@ -301,12 +293,57 @@ def build_residue_graph(df: pd.DataFrame, s: float = 4.0) -> nx.Graph:
     return G
 
 
-def build_residue_graph_per_chain(df: pd.DataFrame, s: float = 4.0) -> nx.Graph:
-    subgraphs = []
-    for chain_id, chain_df in df.groupby("chain_id", sort=False):
-        LOGGER.info(f"Building residue network for chain {chain_id}")
-        subgraphs.append(build_residue_graph(chain_df.reset_index(drop=True), s))
-    return nx.disjoint_union_all(subgraphs)
+def build_chain_graph(df: pd.DataFrame, cutoff: float) -> nx.Graph:
+    LOGGER.info(f"Building chain network (cutoff={cutoff}, {len(df)} atoms)")
+
+    df = df.reset_index(drop=True)
+
+    G = nx.Graph()
+    chains: dict[str, dict] = {}
+    for chain, sub in df.groupby("chain_id", sort=False):
+        coords = sub[["x_coord", "y_coord", "z_coord"]].to_numpy()
+        chains[chain] = {
+            "tree": cKDTree(coords),
+            "mins": coords.min(axis=0),
+            "maxs": coords.max(axis=0),
+        }
+        G.add_node(
+            chain,
+            chain_id=chain,
+            size=len(sub),
+            x_coord=float(sub["x_coord"].mean()),
+            y_coord=float(sub["y_coord"].mean()),
+            z_coord=float(sub["z_coord"].mean()),
+        )
+
+    for chain_a, chain_b in combinations(chains, 2):
+        data_a = chains[chain_a]
+        data_b = chains[chain_b]
+        gap = np.maximum(
+            0,
+            np.maximum(data_a["mins"] - data_b["maxs"], data_b["mins"] - data_a["maxs"]),
+        )
+        if np.linalg.norm(gap) > cutoff:
+            continue
+
+        distances = data_a["tree"].sparse_distance_matrix(
+            data_b["tree"], cutoff, output_type="coo_matrix"
+        )
+        if distances.nnz == 0:
+            continue
+
+        G.add_edge(
+            chain_a,
+            chain_b,
+            weight=int(distances.nnz),
+            min_distance=float(distances.data.min()),
+        )
+
+    LOGGER.info(
+        f"Chain network: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
+    )
+
+    return G
 
 
 def generate_interative_network(G: nx.Graph, path: str):
@@ -390,7 +427,11 @@ def plot_centrality(G: nx.Graph, measure_name: str, path: str):
 
 def plot_communities(G: nx.Graph, communities: list[set], path: str):
     for i, comm in enumerate(communities):
-        chains = {G.nodes[n]["node_id"].split(":")[0] for n in comm}
+        try:
+            chains = {G.nodes[n]["node_id"].split(":")[0] for n in comm}
+        except KeyError:
+            chains = {G.nodes[n]["chain_id"] for n in comm}
+
         print(f"Comm {i}: {chains}")
 
     node_to_community = {n: i for i, comm in enumerate(communities) for n in comm}
@@ -502,15 +543,23 @@ def export_chimerax_script(
     lines = [f"open {p}" for p in pdb_paths]
     lines += ["cartoon", "color gray", "set bgColor white", "lighting simple"]
 
+    sample_node = next(iter(G.nodes()))
+    is_chain_graph = "residue_number" not in G.nodes[sample_node]
+
     for comm_idx, comm in enumerate(communities):
-        chain_residues: dict[str, list[int]] = {}
-        for n in comm:
-            chain_residues.setdefault(G.nodes[n]["chain_id"], []).append(
-                G.nodes[n]["residue_number"]
-            )
         color = palette[comm_idx % len(palette)]
-        for chain, resnums in chain_residues.items():
-            lines.append(f"color /{chain}:{_to_residue_ranges(resnums)} {color}")
+        if is_chain_graph:
+            for n in comm:
+                chain = G.nodes[n].get("chain_id", n)
+                lines.append(f"color /{chain} {color}")
+        else:
+            chain_residues: dict[str, list[int]] = {}
+            for n in comm:
+                chain_residues.setdefault(G.nodes[n]["chain_id"], []).append(
+                    G.nodes[n]["residue_number"]
+                )
+            for chain, resnums in chain_residues.items():
+                lines.append(f"color /{chain}:{_to_residue_ranges(resnums)} {color}")
 
     lines.append("save exports/communities_3d.png width 2000 height 2000 supersample 3")
 
@@ -525,42 +574,23 @@ def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("filename", help="Path to the .pdb or .tar.gz file")
 
-    graph = parser.add_mutually_exclusive_group()
-    graph.add_argument(
-        "--alpha-carbon",
-        action="store_true",
-        help="Generate a network using only alpha-carbon atoms, that are connected if their distance is less than a set cutoff",
-    )
-    graph.add_argument(
-        "--beta-carbon",
-        action="store_true",
-        help="Generate a network using only beta-carbon atoms, that are connected if their distance is less than a set cutoff",
-    )
-    graph.add_argument(
-        "--residue",
-        action="store_true",
-        help="Generate a network using the method discribed by Grant and Ahnert",
+    parser.add_argument(
+        "-g",
+        "--graph",
+        choices=["a-carbon", "b-carbon", "residue", "chain"],
+        required=True,
+        help="Type of graph to create",
     )
 
-    carbon_graph = parser.add_argument_group("Carbon network")
-    carbon_graph.add_argument("--cutoff", help="Distance cutoff", type=float)
-    carbon_graph.add_argument(
-        "--lower-cutoff", help="[Optional] Lower distance cutoff", type=float
-    )
-    carbon_graph.add_argument(
+    parser.add_argument("--cutoff", help="Distance cutoff", type=float, default=8.0)
+    parser.add_argument(
         "--weighted",
         action="store_true",
-        help="Weight edges by the inverse of the distance between the two nodes",
+        help="Weight edges by the inverse of the distance between the two nodes in a-carbon or b-carbon graphs",
     )
 
-    residue_network = parser.add_argument_group("Residue network")
-    residue_network.add_argument(
-        "--scaling", help="Parameter s", type=float, default=4.0
-    )
-    residue_network.add_argument(
-        "--per-chain",
-        action="store_true",
-        help="Build the residue network chain-by-chain (sub-quaternary level), excluding inter-chain contacts",
+    parser.add_argument(
+        "--scaling", help="Parameter s for residue networks", type=float, default=4.0
     )
 
     comm_algo = parser.add_mutually_exclusive_group()
@@ -596,26 +626,22 @@ def main():
 
     df = load_file(args.filename)
     graph = None
-    if args.alpha_carbon and args.cutoff:
+    if args.graph == "a-carbon" and args.cutoff:
         graph = build_alpha_carbon_graph(
             df,
             args.cutoff,
-            args.lower_cutoff if args.lower_cutoff else None,
             weighted=args.weighted,
         )
-    elif args.beta_carbon and args.cutoff:
+    elif args.graph == "b-carbon" and args.cutoff:
         graph = build_beta_carbon_graph(
             df,
             args.cutoff,
-            args.lower_cutoff if args.lower_cutoff else None,
             weighted=args.weighted,
         )
-    elif args.residue and args.scaling:
-        graph = (
-            build_residue_graph_per_chain(df, args.scaling)
-            if args.per_chain
-            else build_residue_graph(df, args.scaling)
-        )
+    elif args.graph == "chain" and args.cutoff:
+        graph = build_chain_graph(df, args.cutoff)
+    elif args.graph == "residue" and args.scaling:
+        graph = build_residue_graph(df, args.scaling)
 
     if graph is None:
         LOGGER.fatal("No network was created")
@@ -660,7 +686,7 @@ def main():
         plot_communities(graph, communities, "exports/communities.jpg")
 
         if args.chimerax:
-            export_chimerax_script(args.filename, graph, communities, "communities.cxc")
+            export_chimerax_script(args.filename, graph, communities, "exports/communities.cxc")
 
         if args.validate:
             biological_validation(args.validate, graph, communities)
