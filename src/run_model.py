@@ -7,6 +7,7 @@ from protein_network import (
     AlphaCarbonNetwork,
     BetaCarbonNetwork,
     ChainNetwork,
+    ChainSimilarityNetwork,
     ResidueNetwork,
 )
 from parser import run_model_parser
@@ -35,6 +36,13 @@ def main():
         network = ChainNetwork(pdb, args.cutoff)
     elif args.graph == "residue" and args.cutoff:
         network = ResidueNetwork(pdb, args.cutoff)
+    elif args.graph == "chain-sim":
+        network = ChainSimilarityNetwork(
+            pdb,
+            threshold=args.sim_threshold,
+            k=args.kmer,
+            method=args.sim_method,
+        )
 
     if network is None:
         print("Failed to create network")
@@ -116,7 +124,7 @@ def main():
         if args.labelprop:
             handle_communities("labelprop", network.labelprop())
         if args.spectral and args.groups:
-            weighted = args.weighted or args.graph in ("chain", "residue")
+            weighted = args.weighted or args.graph in ("chain", "residue", "chain-sim")
             handle_communities(
                 "spectral", network.spectral_bipartition(args.groups, weighted)
             )

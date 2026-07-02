@@ -8,7 +8,7 @@ def run_model_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-g",
         "--graph",
-        choices=["a-carbon", "b-carbon", "residue", "chain"],
+        choices=["a-carbon", "b-carbon", "residue", "chain", "chain-sim"],
         required=True,
         help="Type of graph to create",
     )
@@ -22,6 +22,23 @@ def run_model_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--scaling", help="Parameter s for residue networks", type=float, default=4.0
+    )
+
+    sim = parser.add_argument_group("Chain similarity graph (chain-sim)")
+    sim.add_argument(
+        "--sim-threshold",
+        type=float,
+        default=0.5,
+        help="Minimum sequence similarity to connect two chains",
+    )
+    sim.add_argument(
+        "--sim-method",
+        choices=["kmer", "identity"],
+        default="kmer",
+        help="Similarity measure: k-mer cosine (fast) or alignment identity (Biopython)",
+    )
+    sim.add_argument(
+        "--kmer", type=int, default=3, help="k for k-mer profiles (sim-method=kmer)"
     )
 
     comm = parser.add_argument_group("Community detection")
@@ -75,13 +92,34 @@ def model_selection_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--graphs",
         nargs="+",
-        choices=["a-carbon", "b-carbon", "residue", "chain"],
-        default=["a-carbon", "b-carbon", "residue", "chain"],
-        help="Graph types to sweep (default: all)",
+        choices=["a-carbon", "b-carbon", "residue", "chain", "chain-sim"],
+        default=["a-carbon", "b-carbon", "residue", "chain", "chain-sim"],
+        help="Graph types to sweep (default: all). Contact graphs use the "
+        "--cutoff-* grid (angstroms); chain-sim uses the --sim-threshold-* grid.",
+    )
+    parser.add_argument(
+        "--sim-method",
+        choices=["kmer", "identity"],
+        default="kmer",
+        help="Similarity measure for chain-sim graphs",
+    )
+    parser.add_argument(
+        "--kmer",
+        type=int,
+        default=3,
+        help="k for k-mer profiles (chain-sim, sim-method=kmer)",
     )
     parser.add_argument("--cutoff-start", type=float, default=4.0)
     parser.add_argument("--cutoff-stop", type=float, default=12.0)
     parser.add_argument("--cutoff-step", type=float, default=1.0)
+    parser.add_argument(
+        "--sim-threshold-start",
+        type=float,
+        default=0.1,
+        help="Start of the chain-sim similarity threshold grid (0..1)",
+    )
+    parser.add_argument("--sim-threshold-stop", type=float, default=0.9)
+    parser.add_argument("--sim-threshold-step", type=float, default=0.1)
     parser.add_argument(
         "--k-window",
         type=int,

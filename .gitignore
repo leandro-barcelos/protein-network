@@ -179,3 +179,4 @@ exports/
 pdb/extracted/
 pdb/*.pdb
 pdb/*.tar.gz
+docs/.obsidian/

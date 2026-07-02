@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections import Counter
 from itertools import combinations
 import json
 import os
@@ -14,6 +15,56 @@ import seaborn as sns
 from utils import create_dir
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 import infomap
+from Bio.Align import PairwiseAligner
+
+
+THREE_TO_ONE = {
+    "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
+    "GLN": "Q", "GLU": "E", "GLY": "G", "HIS": "H", "ILE": "I",
+    "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F", "PRO": "P",
+    "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V",
+    "MSE": "M", "SEC": "U", "PYL": "O",
+}
+
+
+def _chain_sequence(chain_df: pd.DataFrame) -> str:
+    residues = chain_df.drop_duplicates(
+        subset=["residue_number", "insertion"]
+    ).sort_values(["residue_number", "insertion"])
+    
+    return "".join(THREE_TO_ONE.get(r, "X") for r in residues["residue_name"])
+
+
+def _kmer_profile(seq: str, k: int) -> Counter:
+    return Counter(seq[i : i + k] for i in range(len(seq) - k + 1))
+
+
+def _cosine(a: Counter, b: Counter) -> float:
+    if not a or not b:
+        return 0.0
+    
+    dot = sum(a[key] * b[key] for key in a.keys() & b.keys())
+    norm = np.sqrt(sum(v * v for v in a.values())) * np.sqrt(
+        sum(v * v for v in b.values())
+    )
+    
+    return float(dot / norm) if norm else 0.0
+
+
+def _identity(seq_a: str, seq_b: str) -> float:
+    if not seq_a or not seq_b:
+        return 0.0
+    
+    aligner = PairwiseAligner()
+    aligner.mode = "global"
+    aligner.match_score = 1.0
+    aligner.mismatch_score = 0.0
+    aligner.open_gap_score = -1.0
+    aligner.extend_gap_score = -0.5
+    alignment = aligner.align(seq_a, seq_b)[0]
+    identical = int(alignment.counts().identities)
+    
+    return identical / max(len(seq_a), len(seq_b))
 
 
 def _to_residue_ranges(resnums: list[int]) -> str:
@@ -317,9 +368,11 @@ class ProteinNetwork(ABC):
 
         dist = self.degree_distribution()
 
+        use_kde = dist["degree"].nunique() > 1
+
         fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
         sns.histplot(
-            x=dist["degree"], weights=dist["count"], kde=True, ax=axes[0]
+            x=dist["degree"], weights=dist["count"], kde=use_kde, ax=axes[0]
         )
         axes[0].set(xlabel="Degree k", ylabel="# of Nodes", title="Degree histogram")
 
@@ -948,6 +1001,61 @@ class ChainNetwork(ProteinNetwork):
 
         print(
             f"Chain network: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
+        )
+
+        self.graph = G
+
+
+class ChainSimilarityNetwork(ProteinNetwork):
+    def __init__(
+        self,
+        pdb: PDB,
+        threshold: float = 0.5,
+        k: int = 3,
+        method: str = "kmer",
+    ):
+        self.threshold = threshold
+        self.k = k
+        self.method = method
+        super().__init__(pdb)
+
+    def _similarity(self, seqs: dict[str, str], chains: list[str]):
+        if self.method == "identity":
+            return {
+                (a, b): _identity(seqs[a], seqs[b])
+                for a, b in combinations(chains, 2)
+            }
+        profiles = {c: _kmer_profile(seqs[c], self.k) for c in chains}
+        return {
+            (a, b): _cosine(profiles[a], profiles[b])
+            for a, b in combinations(chains, 2)
+        }
+
+    def _build_network(self) -> None:
+        df = self.pdb.dataframe
+
+        seqs: dict[str, str] = {}
+        G = nx.Graph()
+        for chain, sub in df.groupby("chain_id", sort=False):
+            seqs[chain] = _chain_sequence(sub)
+            G.add_node(
+                chain,
+                chain_id=chain,
+                size=sub["node_id"].nunique(),
+                x_coord=float(sub["x_coord"].mean()),
+                y_coord=float(sub["y_coord"].mean()),
+                z_coord=float(sub["z_coord"].mean()),
+            )
+
+        chains = list(G.nodes())
+        similarity = self._similarity(seqs, chains)
+        for (chain_a, chain_b), sim in similarity.items():
+            if sim >= self.threshold:
+                G.add_edge(chain_a, chain_b, weight=float(sim))
+
+        print(
+            f"Chain similarity network ({self.method}, threshold={self.threshold}): "
+            f"{G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
         )
 
         self.graph = G

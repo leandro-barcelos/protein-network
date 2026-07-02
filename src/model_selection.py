@@ -10,6 +10,7 @@ from protein_network import (
     AlphaCarbonNetwork,
     BetaCarbonNetwork,
     ChainNetwork,
+    ChainSimilarityNetwork,
     ResidueNetwork,
 )
 from parser import model_selection_parser
@@ -18,21 +19,27 @@ from parser import model_selection_parser
 # graph_type -> (builder(pdb, cutoff, weighted), weighted variants to sweep)
 GRAPH_BUILDERS = {
     "a-carbon": (
-        lambda pdb, cutoff, weighted: AlphaCarbonNetwork(
+        lambda pdb, cutoff, weighted, kmer, sim_method: AlphaCarbonNetwork(
             pdb, cutoff, weighted=weighted
         ),
         [False, True],
     ),
     "b-carbon": (
-        lambda pdb, cutoff, weighted: BetaCarbonNetwork(pdb, cutoff, weighted=weighted),
+        lambda pdb, cutoff, weighted, kmer, sim_method: BetaCarbonNetwork(pdb, cutoff, weighted=weighted),
         [False, True],
     ),
     "residue": (
-        lambda pdb, cutoff, weighted: ResidueNetwork(pdb, cutoff),
+        lambda pdb, cutoff, weighted, kmer, sim_method: ResidueNetwork(pdb, cutoff),
         [True],
     ),
     "chain": (
-        lambda pdb, cutoff, weighted: ChainNetwork(pdb, cutoff),
+        lambda pdb, cutoff, weighted, kmer, sim_method: ChainNetwork(pdb, cutoff),
+        [True],
+    ),
+    "chain-sim": (
+        lambda pdb, cutoff, weighted, kmer, sim_method: ChainSimilarityNetwork(
+            pdb, threshold=cutoff, k=kmer, method=sim_method
+        ),
         [True],
     ),
 }
@@ -101,6 +108,9 @@ def main():
         n_families = len(family_to_chains)
 
     cutoffs = cutoff_grid(args.cutoff_start, args.cutoff_stop, args.cutoff_step)
+    sim_thresholds = cutoff_grid(
+        args.sim_threshold_start, args.sim_threshold_stop, args.sim_threshold_step
+    )
     k_values = spectral_k_values(n_families, args.k_window)
 
     pdb = PDB(args.filename)
@@ -108,12 +118,13 @@ def main():
     rows: list[dict] = []
     for graph_type in args.graphs:
         builder, weighted_variants = GRAPH_BUILDERS[graph_type]
-        for cutoff in cutoffs:
+        grid = sim_thresholds if graph_type == "chain-sim" else cutoffs
+        for cutoff in grid:
             for weighted in weighted_variants:
                 print(f"\n>>> {graph_type} | cutoff={cutoff} | weighted={weighted}")
                 try:
-                    network = builder(pdb, cutoff, weighted)
-                except Exception as exc:  # skip degenerate configurations
+                    network = builder(pdb, cutoff, weighted, args.kmer, args.sim_method)
+                except Exception as exc:
                     print(f"    skipped ({type(exc).__name__}: {exc})")
                     continue
 
@@ -122,10 +133,17 @@ def main():
                     print("    skipped (no edges)")
                     continue
 
+                is_chain_sim = graph_type == "chain-sim"
                 base = {
                     "graph_type": graph_type,
                     "cutoff": cutoff,
                     "weighted": weighted,
+                    "sim_method": args.sim_method if is_chain_sim else None,
+                    "kmer_k": (
+                        args.kmer
+                        if is_chain_sim and args.sim_method == "kmer"
+                        else None
+                    ),
                     **stats,
                 }
 
