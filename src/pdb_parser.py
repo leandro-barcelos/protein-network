@@ -24,7 +24,7 @@ def _load_tar_file(filepath: str, out_dir: str) -> pd.DataFrame:
                 continue
             os.remove(os.path.join(out_dir, name))
     else:
-        os.makedirs(out_dir, exists_ok=True)
+        os.makedirs(out_dir, exist_ok=True)
 
     with tarfile.open(filepath) as file:
         file.extractall(out_dir)

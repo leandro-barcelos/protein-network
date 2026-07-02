@@ -16,6 +16,7 @@ from utils import create_dir
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 import infomap
 from Bio.Align import PairwiseAligner
+from definitions import ROOT_DIR
 
 
 THREE_TO_ONE = {
@@ -727,7 +728,7 @@ class ProteinNetwork(ABC):
             else [self.pdb.filepath]
         )
 
-        lines = [f"open {p}" for p in pdb_paths]
+        lines = [f'open "{p}"' for p in pdb_paths]
         lines += ["cartoon", "color gray", "set bgColor white", "lighting simple"]
 
         sample_node = next(iter(self.graph.nodes()))
@@ -750,11 +751,11 @@ class ProteinNetwork(ABC):
                         f"color /{chain}:{_to_residue_ranges(resnums)} {color}"
                     )
 
+        create_dir(out_dir)
         lines.append(
-            "save exports/communities_3d.png width 2000 height 2000 supersample 3"
+            f'save "{os.path.join(ROOT_DIR, out_dir, "communities_3d.png")}" width 2000 height 2000 supersample 3'
         )
 
-        create_dir(out_dir)
         filepath = os.path.join(out_dir, "chimerax.cxc")
         with open(filepath, "w") as f:
             f.write("\n".join(lines))
