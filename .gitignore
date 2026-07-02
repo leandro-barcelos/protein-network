@@ -175,6 +175,7 @@ pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
 
-docs/
 exports/
-pdb/
+pdb/extracted/
+pdb/*.pdb
+pdb/*.tar.gz
