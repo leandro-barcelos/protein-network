@@ -10,7 +10,7 @@ from protein_network import (
     ChainSimilarityNetwork,
     ResidueNetwork,
 )
-from parser import run_model_parser
+from arg_parser import run_model_parser
 from utils import create_dir
 
 

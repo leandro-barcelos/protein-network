@@ -13,7 +13,7 @@ from protein_network import (
     ChainSimilarityNetwork,
     ResidueNetwork,
 )
-from parser import model_selection_parser
+from arg_parser import model_selection_parser
 
 
 # graph_type -> (builder(pdb, cutoff, weighted), weighted variants to sweep)
