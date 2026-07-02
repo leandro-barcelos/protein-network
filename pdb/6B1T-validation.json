@@ -1,0 +1,9 @@
+{
+  "Adenovirus hexon protein": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"],
+  "Pre-hexon-linking protein IIIa": ["N"],
+  "Pre-hexon-linking protein VIII": ["O", "P"],
+  "Hexon-associated protein IX": ["Q", "R", "S", "T"],
+  "Adenovirus penton base protein": ["M"],
+  "Minor capsid protein VI": ["U", "V", "Y", "X"],
+  "Adenoviral core protein VII": ["W"]
+}
