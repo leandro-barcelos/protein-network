@@ -439,7 +439,7 @@ class ProteinNetwork(ABC):
             idx = cent.nlargest(top, col).index
             if "node_id" in cent.columns:
                 return cent.loc[idx, "node_id"].tolist()
-            return [int(i) for i in idx]
+            return idx.tolist()
 
         return {
             "avg_degree": float(degrees.mean()) if len(degrees) else 0.0,
