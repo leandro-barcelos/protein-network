@@ -151,6 +151,9 @@ class ProteinNetwork(ABC):
     def _build_network(self) -> None:
         pass
 
+    def _atom_group_key(self) -> str | None:
+        return None
+
     def louvain(self) -> list[set]:
         print("Detecting communities with Louvain")
         return nx.algorithms.community.louvain_communities(self.graph, weight="weight")
@@ -632,31 +635,47 @@ class ProteinNetwork(ABC):
         filepath = os.path.join(out_dir, f"structure_3d_{by}.jpg")
         print(f"Plotting 3D structure ({filepath})")
 
-        nodes = list(self.graph.nodes())
-        xyz = np.array(
-            [
-                (
-                    self.graph.nodes[n]["x_coord"],
-                    self.graph.nodes[n]["y_coord"],
-                    self.graph.nodes[n]["z_coord"],
-                )
-                for n in nodes
-            ]
-        )
-
-        if by == "chain":
-            chains = sorted({self.graph.nodes[n]["chain_id"] for n in nodes})
-            chain_to_idx = {c: i for i, c in enumerate(chains)}
-            palette = sns.color_palette(None, len(chains))
-            node_colors = [
-                palette[chain_to_idx[self.graph.nodes[n]["chain_id"]]] for n in nodes
-            ]
+        group_key = self._atom_group_key()
+        if group_key is None:
+            nodes = list(self.graph.nodes())
+            xyz = np.array(
+                [
+                    (
+                        self.graph.nodes[n]["x_coord"],
+                        self.graph.nodes[n]["y_coord"],
+                        self.graph.nodes[n]["z_coord"],
+                    )
+                    for n in nodes
+                ]
+            )
+            chain_labels = [self.graph.nodes[n]["chain_id"] for n in nodes]
+            node_to_community = {
+                n: i for i, comm in enumerate(communities) for n in comm
+            }
+            community_labels = [node_to_community[n] for n in nodes]
         else:
             node_to_community = {
                 n: i for i, comm in enumerate(communities) for n in comm
             }
+            value_to_community = {
+                self.graph.nodes[n][group_key]: node_to_community[n]
+                for n in self.graph.nodes()
+            }
+            df = self.pdb.dataframe[
+                self.pdb.dataframe[group_key].isin(value_to_community)
+            ]
+            xyz = df[["x_coord", "y_coord", "z_coord"]].to_numpy()
+            chain_labels = df["chain_id"].tolist()
+            community_labels = df[group_key].map(value_to_community).tolist()
+
+        if by == "chain":
+            categories = sorted(set(chain_labels))
+            palette = sns.color_palette(None, len(categories))
+            category_to_color = {c: palette[i] for i, c in enumerate(categories)}
+            node_colors = [category_to_color[c] for c in chain_labels]
+        else:
             palette = sns.color_palette(None, len(communities))
-            node_colors = [palette[node_to_community[n]] for n in nodes]
+            node_colors = [palette[c] for c in community_labels]
 
         fig = plt.figure(figsize=(9, 8))
         ax = fig.add_subplot(111, projection="3d")
@@ -866,6 +885,9 @@ class ResidueNetwork(ProteinNetwork):
         self.cutoff = cutoff
         super().__init__(pdb)
 
+    def _atom_group_key(self) -> str | None:
+        return "node_id"
+
     def _build_network(self) -> None:
         coords = self.pdb.dataframe[["x_coord", "y_coord", "z_coord"]].to_numpy()
 
@@ -954,6 +976,9 @@ class ChainNetwork(ProteinNetwork):
         self.cutoff = cutoff
         super().__init__(pdb)
 
+    def _atom_group_key(self) -> str | None:
+        return "chain_id"
+
     def _build_network(self) -> None:
         df = self.pdb.dataframe.reset_index(drop=True)
 
@@ -1019,6 +1044,9 @@ class ChainSimilarityNetwork(ProteinNetwork):
         self.k = k
         self.method = method
         super().__init__(pdb)
+        
+    def _atom_group_key(self) -> str | None:
+        return "chain_id"
 
     def _similarity(self, seqs: dict[str, str], chains: list[str]):
         if self.method == "identity":
