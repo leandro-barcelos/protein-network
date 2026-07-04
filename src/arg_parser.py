@@ -110,10 +110,7 @@ def run_model_parser() -> argparse.ArgumentParser:
         "-p",
         "--plot",
         action="store_true",
-        help="Save plots (degree distribution, centralities, communities)",
-    )
-    export.add_argument(
-        "--html", action="store_true", help="Save an interactive HTML network"
+        help="Save plots (degree distribution, centralities, communities, graph image)",
     )
     export.add_argument(
         "--chimerax",

@@ -59,9 +59,6 @@ def main():
     if not os.path.isdir("exports"):
         os.mkdir("exports")
 
-    if args.html and args.out:
-        network.generate_interative_network(args.out)
-
     any_community = (
         args.louvain or args.infomap or args.greedy or args.labelprop or args.spectral
     )
@@ -99,6 +96,7 @@ def main():
         if args.plot:
             network.plot_communities(communities, subdir)
             network.plot_structure_3d(communities, subdir)
+            network.plot_graph(communities, subdir, cent=cent)
         if args.validate:
             network.validate_communities(args.validate, communities, subdir)
         network.generate_report(

@@ -10,7 +10,6 @@ import networkx as nx
 from scipy.spatial import cKDTree
 import numpy as np
 import matplotlib.pyplot as plt
-from pyvis.network import Network
 import seaborn as sns
 from utils import create_dir
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
@@ -275,15 +274,73 @@ class ProteinNetwork(ABC):
 
         return {"contingency": contingency, "ari": ari, "nmi": nmi, "purity": purity}
 
-    def generate_interative_network(self, out_dir: str):
-        filepath = os.path.join(out_dir, "graph.html")
-        print(f"Generating interactive network ({filepath})")
+    def plot_graph(
+        self,
+        communities: list[set],
+        out_dir: str,
+        cent: pd.DataFrame | None = None,
+        centrality: str = "betweenness",
+        label_max_nodes: int = 80,
+    ):
+        """Static graph image: node color by community, node size by centrality,
+        edge width by weight, node labels for small graphs."""
+        filepath = os.path.join(out_dir, "graph.jpg")
+        print(f"Plotting network graph ({filepath})")
 
-        net = Network(height="800px", width="100%", notebook=False)
-        net.from_nx(self.graph)
+        G = self.graph
+        nodes = list(G.nodes())
+        if cent is None:
+            cent = self.compute_centralities()
+
+        node_to_community = {n: i for i, comm in enumerate(communities) for n in comm}
+        palette = sns.color_palette(None, len(communities))
+        node_colors = [palette[node_to_community[n]] for n in nodes]
+
+        values = cent[centrality].reindex(nodes).fillna(0.0).to_numpy(dtype=float)
+        vmax = values.max() if values.size and values.max() > 0 else 1.0
+        node_sizes = 50 + 800 * (values / vmax)
+
+        weights = np.array(
+            [G[u][v].get("weight", 1.0) for u, v in G.edges()], dtype=float
+        )
+        wmax = weights.max() if weights.size and weights.max() > 0 else 1.0
+        edge_widths = 0.2 + 3.0 * (weights / wmax)
+
+        if len(nodes) <= 300:
+            pos = nx.spring_layout(G, weight="weight", seed=42)
+        else:
+            pos = {
+                n: (G.nodes[n]["x_coord"], G.nodes[n]["y_coord"]) for n in nodes
+            }
+
+        plt.figure(figsize=(14, 12))
+        nx.draw_networkx_edges(G, pos, width=edge_widths, alpha=0.4)
+        nx.draw_networkx_nodes(
+            G,
+            pos,
+            nodelist=nodes,
+            node_size=node_sizes,
+            node_color=node_colors,
+            linewidths=0.3,
+            edgecolors="white",
+        )
+        if len(nodes) <= label_max_nodes:
+            labels = {
+                n: G.nodes[n].get("node_id", G.nodes[n].get("chain_id", str(n)))
+                for n in nodes
+            }
+            nx.draw_networkx_labels(G, pos, labels=labels, font_size=8)
+
+        plt.axis("off")
+        plt.title(
+            f"Network graph (color=community, size={centrality}, width=weight)",
+            fontsize=16,
+        )
+        plt.tight_layout()
 
         create_dir(out_dir)
-        net.write_html(filepath, notebook=False)
+        plt.savefig(filepath, dpi=150)
+        plt.close()
 
     def compute_network_stats(self) -> dict:
         n = self.graph.number_of_nodes()
@@ -744,7 +801,7 @@ class ProteinNetwork(ABC):
                 if name.endswith(".pdb")
             ]
             if self.pdb.filepath.endswith(".tar.gz")
-            else [self.pdb.filepath]
+            else [os.path.join(ROOT_DIR, self.pdb.filepath)]
         )
 
         lines = [f'open "{p}"' for p in pdb_paths]
