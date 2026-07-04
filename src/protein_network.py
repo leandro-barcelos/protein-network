@@ -47,8 +47,8 @@ def _cosine(a: Counter, b: Counter) -> float:
     norm = np.sqrt(sum(v * v for v in a.values())) * np.sqrt(
         sum(v * v for v in b.values())
     )
-    
-    return float(dot / norm) if norm else 0.0
+
+    return min(float(dot / norm), 1.0) if norm else 0.0
 
 
 def _identity(seq_a: str, seq_b: str) -> float:
