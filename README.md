@@ -12,7 +12,7 @@ O projeto constrói grafos a partir de estruturas de proteínas (arquivos `.pdb`
 ```bash
 # 1. Clonar o repositório
 git clone https://github.com/leandro-barcelos/protein-network.git
-cd projeto
+cd protein-network
 
 # 2. Criar ambiente virtual
 python3 -m venv .venv
