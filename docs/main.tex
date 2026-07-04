@@ -161,7 +161,7 @@
 	\subsection{Topologia das redes de contato}
 	\label{sec_topologia_contato}
 
-	A topologia das redes de contato revela sua natureza geométrica. A Tabela~\ref{tab_topologia} resume as métricas da rede C$\alpha$ a 8 Å (valor adotado na literatura) para o alvo (6B1T) e para uma proteína de teste (1AON).
+	A Tabela~\ref{tab_topologia} resume as métricas da rede C$\alpha$ a 8 Å (valor adotado na literatura) para o alvo (6B1T) e para uma proteína de teste (1AON).
 
 	\begin{table}[H]
 		\centering
@@ -184,7 +184,7 @@
 		\label{tab_topologia}
 	\end{table}
 
-	As duas redes têm o mesmo perfil. Com o limiar de 8 Å, toda a estrutura forma um único componente conexo, com grau médio próximo de 11 e distribuição de graus em forma de sino (Figuras~\ref{fig_deg_6b1t} e~\ref{fig_deg_1aon}). Como o grau de um nó é o número de vizinhos espaciais dentro do limiar, os nós de maior grau indicam que os átomos estão em regiões mais densas, enquanto os de menor grau estão em regiões mais expostas ou nas extremidades das cadeias. O alto clustering reflete o fato de que os vizinhos de um nó tendem a ser vizinhos entre si, e a assortatividade positiva indica que nós de grau alto se conectam preferencialmente a outros nós de grau alto. A centralidade de intermediação destaca os nós situados nos caminhos entre as regiões densas do grafo (Figura~\ref{fig_betw_6b1t}), tipicamente nos pontos em que cadeias diferentes se tocam.
+	As duas redes têm o mesmo perfil. Com o limiar de 8 Å, toda a estrutura forma um único componente conexo, com grau médio próximo de 11 e distribuição de graus em forma de sino (Figuras~\ref{fig_deg_6b1t} e~\ref{fig_deg_1aon}). Como, para esse tipo de rede, o grau de um nó é o número de vizinhos espaciais dentro do limiar, um grau maior indica que a região que o átomo está é mais densas, enquanto um grau menor indica uma região mais expostas ou nas extremidades das cadeias. O alto clustering reflete o fato de que os vizinhos de um nó tendem a ser vizinhos entre si, e a assortatividade positiva indica que nós de grau alto se conectam preferencialmente a outros nós de grau alto. A centralidade de intermediação destaca os nós situados nos caminhos entre as regiões densas do grafo (Figura~\ref{fig_betw_6b1t}), tipicamente nos pontos em que cadeias diferentes se tocam.
 
 	\begin{figure}[H]
 		\centering
@@ -342,7 +342,7 @@
 	\subsection{Alvo 6B1T}
 	\label{sec_alvo}
 
-	No alvo, a rede de similaridade se fragmenta em oito cliques, um por família, o que torna a detecção trivial. O grau de cada nó é igual ao tamanho de sua família menos um, o clustering é máximo dentro de cada clique, a assortatividade é perfeita e a intermediação é nula, pois não há nenhuma ponte entre as famílias. A Figura~\ref{fig_sim_graph} mostra essa estrutura de cliques.
+	No alvo, a rede de similaridade se fragmenta em oito cliques, um por família, o que torna a detecção trivial. O grau de cada nó é igual ao tamanho de sua família menos um, o clustering é máximo dentro de cada clique, a assortatividade é 1.0 e a intermediação é nula, pois não há nenhuma ponte entre as famílias. A Figura~\ref{fig_sim_graph} mostra essa estrutura de cliques.
 
 	\begin{figure}[H]
 		\centering
@@ -351,7 +351,7 @@
 		\label{fig_sim_graph}
 	\end{figure}
 
-	Como cada família já constitui um componente isolado, todos os algoritmos convergem para a mesma partição, recuperando os oito componentes como oito comunidades. A partição identifica exatamente as famílias anotadas, com ARI igual a 1,00. A Tabela~\ref{tab_contingencia} mostra a matriz de contingência entre comunidades e famílias. Por ser uma matriz diagonal, nenhuma comunidade mistura famílias, ou seja, cada comunidade corresponde exatamente a uma família.
+	Como cada componente isolado já representa uma família, todos os algoritmos convergem para a mesma partição, recuperando os oito componentes como oito comunidades. A partição identifica exatamente as famílias anotadas, como pode ser confirmado pela matriz de contingência entre comunidades e famílias (Tabela~\ref{tab_contingencia}). Por ser uma matriz diagonal, nenhuma comunidade mistura famílias, ou seja, cada comunidade corresponde exatamente a uma família.
 
 	\begin{table}[H]
 		\centering

@@ -1,14 +1,14 @@
 # Fdb version 4
-["bibtex main"] 1783140084.66899 "main.aux" "main.bbl" "main" 1783140191.23791 0
+["bibtex main"] 1783141420.29471 "main.aux" "main.bbl" "main" 1783141544.23112 0
   "./apalike-pt.bst" 1783101056 24643 3f3be569670da5e1533563dc2b894128 ""
   "./references.bib" 1783134281.93287 2084 2982b57a0987b40bbd50712113289724 ""
-  "main.aux" 1783140190.93912 7857 889393fa3b81dd570a3e3ed6b7b0e99a "pdflatex"
+  "main.aux" 1783141543.99967 7857 889393fa3b81dd570a3e3ed6b7b0e99a "pdflatex"
   (generated)
   "main.bbl"
   "main.blg"
   (rewritten before read)
-["pdflatex"] 1783140190.42836 "/var/home/leandrobf/Documents/UFU/Mestrado/1 - Semestre/Redes Complexas/projeto/docs/main.tex" "main.pdf" "main" 1783140191.23813 0
-  "/var/home/leandrobf/Documents/UFU/Mestrado/1 - Semestre/Redes Complexas/projeto/docs/main.tex" 1783140055.71235 21631 b0cbcac2c6682885ff75f534a4426c95 ""
+["pdflatex"] 1783141543.55077 "/var/home/leandrobf/Documents/UFU/Mestrado/1 - Semestre/Redes Complexas/projeto/docs/main.tex" "main.pdf" "main" 1783141544.23131 0
+  "/var/home/leandrobf/Documents/UFU/Mestrado/1 - Semestre/Redes Complexas/projeto/docs/main.tex" 1783141543.3728 21576 9a43d9800befd36b45da60ad26ce47eb ""
   "/var/usrlocal/texlive/2026/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/var/usrlocal/texlive/2026/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/var/usrlocal/texlive/2026/texmf-dist/fonts/tfm/adobe/courier/pcrr8r.tfm" 1136768653 1292 bd42be2f344128bff6d35d98474adfe3 ""
@@ -175,10 +175,10 @@
   "figures/6B1T-sim-structure_3d.jpg" 1783126794.99331 102625 0748d23f8bacdc428960458b9557db62 ""
   "figures/6MID-chimerax-contact_comm.png" 1783089006.83365 95336 6d3513aa2c107b9841e88da229f803c2 ""
   "figures/6MID-chimerax-desired_comm.png" 1783103836.76178 202771 1940a59a9cd7097dc251ed388da59270 ""
-  "main.aux" 1783140190.93912 7857 889393fa3b81dd570a3e3ed6b7b0e99a "pdflatex"
-  "main.bbl" 1783140084.75809 748 7c75ee97610cbf01894a4f525d682cb7 "bibtex main"
-  "main.out" 1783140190.94012 2007 a8a39fb72eac5d9531894ed904bfe36c "pdflatex"
-  "main.tex" 1783140055.71235 21631 b0cbcac2c6682885ff75f534a4426c95 ""
+  "main.aux" 1783141543.99967 7857 889393fa3b81dd570a3e3ed6b7b0e99a "pdflatex"
+  "main.bbl" 1783141420.36537 746 8e5336be175fce8d6e6061f661f5928d "bibtex main"
+  "main.out" 1783141544.00067 2007 a8a39fb72eac5d9531894ed904bfe36c "pdflatex"
+  "main.tex" 1783141543.3728 21576 9a43d9800befd36b45da60ad26ce47eb ""
   "sbc-template.sty" 1783101056 5283 4d039733371c6ff509e1555710ddd736 ""
   (generated)
   "main.aux"
